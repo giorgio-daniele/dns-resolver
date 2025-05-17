@@ -221,7 +221,7 @@ impl Dns {
             buffer.write_u16(a.atype);
             buffer.write_u16(a.aclass);
             buffer.write_u32(a.ttl);
-            buffer.write_u16(a.length);
+            //buffer.write_u16(a.length);
             let raw = encode_rdata(&a.rdata).unwrap_or_else(|_| vec![]);
             buffer.write_u16(raw.len() as u16);
             buffer.write_bytes(&raw);
@@ -233,7 +233,7 @@ impl Dns {
             buffer.write_u16(a.atype);
             buffer.write_u16(a.aclass);
             buffer.write_u32(a.ttl);
-            buffer.write_u16(a.length);
+            //buffer.write_u16(a.length);
             let raw = encode_rdata(&a.rdata).unwrap_or_else(|_| vec![]);
             buffer.write_u16(raw.len() as u16);
             buffer.write_bytes(&raw);
@@ -251,7 +251,7 @@ impl Dns {
             buffer.write_u16(a.atype);
             buffer.write_u16(a.aclass);
             buffer.write_u32(a.ttl);
-            buffer.write_u16(a.length);
+            //buffer.write_u16(a.length);
             let raw = encode_rdata(&a.rdata).unwrap_or_else(|_| vec![]);
             buffer.write_u16(raw.len() as u16);
             buffer.write_bytes(&raw);

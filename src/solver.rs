@@ -6,7 +6,6 @@ use crate::dns::{AnswerRecord, Buffer, Dns, DnsError, RData};
 async fn send_recv(
     msg: &[u8],
     addr: &str,
-    port: u16,
 ) -> Result<([u8; 4096], usize), DnsError> {
     /*
      * Create an ephemeral UDP socket, send DNS packet to remote addr,
@@ -16,7 +15,7 @@ async fn send_recv(
         .await
         .map_err(|_| DnsError::SocketError)?;
 
-    sock.send_to(msg, format!("{}:{}", addr, port))
+    sock.send_to(msg, format!("{}", addr))
         .await
         .map_err(|_| DnsError::IOError(String::from("can't send DNS packet")))?;
 
@@ -28,22 +27,62 @@ async fn send_recv(
     Ok((buf, size))
 }
 
-pub async fn proc(mut dns: Dns, _addr: SocketAddr) -> Result<(), DnsError> {
+fn process_records(map: &mut HashMap<String, Vec<RData>>, records: &Vec<AnswerRecord>) {
+    for a in records {
+        map
+            .entry(a.aname.clone())
+            .and_modify(|v| v.push(a.rdata.clone()))
+            .or_insert_with(|| vec![a.rdata.clone()]);
+    }
+}
+
+pub async fn proc(mut dns: Dns, addr: SocketAddr) -> Result<Vec<u8>, DnsError> {
     /*
      * Send request to root server with EDNS0 and recursion disabled.
      * Collect authoritative and additional records.
      * Query the first resolved A record from additional records.
      */
-
     dns.header.flags.rd = false;
 
-    // Two maps: domain -> authoritative RData, and name server -> A record(s)
-    let mut root_domains   : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut root_addresses : HashMap<String, Vec<RData>> = HashMap::new();
+    /*
+     * Root server response storage
+     * 
+     * - root_answers: Typically empty, root servers rarely return direct answers.
+     * - root_authorities: Maps queried domain (e.g., "com") to name servers 
+     *   responsible for that TLD.
+     * - root_additionals: Maps those name servers to their corresponding IP 
+     *   addresses.
+     */
+    let mut _root_answers    : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut root_authorities : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut root_additionals : HashMap<String, Vec<RData>> = HashMap::new();
 
-    // Two maps: domain -> authoritative RData, and name server -> A record(s)
-    let mut tld_domains   : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut tld_addresses : HashMap<String, Vec<RData>> = HashMap::new();
+    /*
+     * TLD server response storage
+     * 
+     * - tld_answers: Usually empty, TLD servers also delegate to authoritative 
+     *   servers.
+     * - tld_authorities: Maps domain (e.g., "example.com") to authoritative 
+     *   name servers.
+     * - tld_additionals: Maps those name servers to their IP addresses.
+     */
+    let mut _tld_answers    : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut tld_authorities : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut tld_additionals : HashMap<String, Vec<RData>> = HashMap::new();
+
+    /*
+     * Authoritative server response storage
+     * 
+     * - auth_answers: Contains the final answer(s), such as A/AAAA or CNAME 
+     *   records.
+     * - auth_authorities: May include SOA (Start of Authority) or further 
+     *   delegation data.
+     * - auth_additionals: Related additional records (e.g., A records of 
+     *   NS entries).
+     */
+    let mut auth_answers     : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut auth_authorities : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut auth_additionals : HashMap<String, Vec<RData>> = HashMap::new();
 
     // Add EDNS0 OPT record to support larger UDP payloads
     dns.add_additional(AnswerRecord {
@@ -55,104 +94,109 @@ pub async fn proc(mut dns: Dns, _addr: SocketAddr) -> Result<(), DnsError> {
         rdata:  RData::EMPTY([]),
     });
 
-    // Initial query to root server
-    let msg       = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), "198.41.0.4", 53).await?;
-    let resp         = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+    /*
+     * 
+     * 
+     * Query the ROOT Server
+     * 
+     * 
+     */
+    let msg        = dns.encode()?;
+    let (res, len) = send_recv(msg.get_data(), "198.41.0.4:53").await?;
+    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+
+    // Fill the maps associated to root reply
+    process_records(& mut root_authorities, &resp.authorities);
+    process_records(& mut root_additionals, &resp.additionals);
+
+    let addr = 
+        root_additionals
+        .iter()
+        .find_map(|(_, values)| {
+            values.iter().find_map(|r| {
+                if let RData::A(ipv4) = r {
+                    Some(ipv4.to_string() + ":53")
+                } else {
+                    None
+                }
+        })
+    })
+        .ok_or_else(|| 
+            DnsError::IOError(String::from("no A record found in additional records")))?;
+    /*
+     * 
+     * 
+     * Query the TLD Server
+     * 
+     * 
+     */
+    let msg        = dns.encode()?;
+    let (res, len) = send_recv(msg.get_data(), &addr).await?;
+    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+    
+    // Fill the maps associated to tld reply
+    process_records(& mut tld_authorities, &resp.authorities);
+    process_records(& mut tld_additionals, &resp.additionals);
 
     /*
      * 
-     * If "answers" is empty (to be expected), it means the server does not
-     * anything about the domain mapping, but it knows the servers which are
-     * responsible for mapping.... As a consequence, if "answers" records is
-     * no longer empty, it means... the process is done!
-     *
-     */
-
-    for a in &resp.authorities {
-        root_domains
-            .entry(a.aname.clone())
-            .and_modify(|v| v.push(a.rdata.clone()))
-            .or_insert_with(|| vec![a.rdata.clone()]);
-    }
-
-    for a in resp.additionals.iter().filter(|a| matches!(a.rdata, RData::A(_))) {
-        root_addresses
-            .entry(a.aname.clone())
-            .and_modify(|v| v.push(a.rdata.clone()))
-            .or_insert_with(|| vec![a.rdata.clone()]);
-    }
-
-    // Choose the first available A record from additional records
-    let mut addr = None;
-    let port = 53;
-
-    if let Some((_key, values)) = root_addresses.iter().next() {
-        if let Some(RData::A(ipv4)) = values.iter().find(|r| matches!(r, RData::A(_))) {
-            addr = Some(ipv4.to_string());
-        }
-    }
-
-    let addr = addr.ok_or_else(|| DnsError::IOError(
-        String::from("no A record found in additional records")))?;
-
-    // Send follow-up request (query the TLD) to the resolved IP address
-    let msg       = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), &addr, port).await?;
-    let resp         = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
-
-
-    for a in &resp.authorities {
-        tld_domains
-            .entry(a.aname.clone())
-            .and_modify(|v| v.push(a.rdata.clone()))
-            .or_insert_with(|| vec![a.rdata.clone()]);
-    }
-
-    for a in resp.additionals.iter().filter(|a| matches!(a.rdata, RData::A(_))) {
-        tld_addresses
-            .entry(a.aname.clone())
-            .and_modify(|v| v.push(a.rdata.clone()))
-            .or_insert_with(|| vec![a.rdata.clone()]);
-    }
-
-    // println!("Updated addresses after TLD query:\n{:#?}", addresses);
-
-    /*
      * 
-     * If "answers" is empty (to be expected), it means the server does not
-     * anything about the domain mapping, but it knows the servers which are
-     * responsible for mapping.... As a consequence, if "answers" records is
-     * no longer empty, it means... the process is done!
+     * Query the Authoritative Server
      * 
-     * Next stage should be the last one...
-     *
+     * 
      */
+    let addr = 
+        tld_additionals
+        .iter()
+        .find_map(|(_, values)| {
+            values.iter().find_map(|r| {
+                if let RData::A(ipv4) = r {
+                    Some(ipv4.to_string() + ":53")
+                } else {
+                    None
+                }
+        })
+    })
+        .ok_or_else(|| 
+            DnsError::IOError(String::from("no A record found in additional records")))?;
 
-    // Choose the first available A record from additional records
-    let mut addr = None;
-    let port = 53;
+    let msg        = dns.encode()?;
+    let (res, len) = send_recv(msg.get_data(), &addr).await?;
+    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
 
-    if let Some((_key, values)) = tld_addresses.iter().next() {
-        if let Some(RData::A(ipv4)) = values.iter().find(|r| matches!(r, RData::A(_))) {
-            addr = Some(ipv4.to_string());
-        }
-    }
+    process_records(& mut auth_answers,     &resp.answers);
+    process_records(& mut auth_authorities, &resp.authorities);
+    process_records(& mut auth_additionals, &resp.additionals);    
 
-    let addr = addr.ok_or_else(|| DnsError::IOError(
-        String::from("no A record found in additional records")))?;
+    // println!("{:#?}", resp.answers);
+    // println!("-----------");
+    // println!("{:#?}", auth_authorities);
+    // println!("-----------");
+    // println!("{:#?}", auth_additionals);
+    // println!("-----------");
+    // println!("-----------");
 
-    println!("{:#?}", tld_addresses);
+    // Finalize and send DNS response to client
+    // Mark as response
+    dns.header.flags.qr    = true;
+    dns.header.flags.aa    = true;   // Authoritative if final server was authoritative
+    dns.header.flags.ra    = false;  // No recursion
+    dns.header.flags.rcode = 0;      // No error
 
-    println!("________________________");
+    // Copy answer sections from final resolved response
+    dns.answers     = resp.answers.clone();
+    dns.authorities = resp.authorities.clone();
+    dns.additionals = resp.additionals.clone();
 
-    // Send follow-up request (query the TLD) to the resolved IP address
-    let msg       = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), &addr, port).await?;
-    let resp         = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+    // Update section counts
+    dns.header.an_count = dns.answers.len()     as u16;
+    dns.header.ns_count = dns.authorities.len() as u16;
+    dns.header.ar_count = dns.additionals.len() as u16;
 
-    println!("{:#?}", resp);
+    println!("-----------");
+    println!("{:#?}", dns);
+    println!("-----------");
 
-
-    Ok(())
+    let resp = dns.encode()?;
+    return Ok(resp.get_data().to_vec());
 }
