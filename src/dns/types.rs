@@ -45,7 +45,7 @@ pub struct Flags {
 
 /// A DNS question entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Question {
+pub struct QueryRecord {
     /// Domain name being queried (e.g., "example.com").
     pub qname: String,
     /// Type of query (e.g., A, AAAA, MX).
@@ -65,7 +65,7 @@ pub enum RData {
 
 /// A DNS answer record.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Answer {
+pub struct AnswerRecord {
     /// Domain name to which this answer refers.
     pub aname: String,
     /// Type of the answer (e.g., A, AAAA, MX).
@@ -84,22 +84,22 @@ pub struct Answer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dns {
     /// Header section of the DNS message.
-    pub header:     Header,
+    pub header:        Header,
     /// List of question entries in the DNS message.
-    pub questions: Vec<Question>,
+    pub questions:     Vec<QueryRecord>,
     /// List of answer records in the DNS message.
-    pub answers:    Vec<Answer>,
+    pub answers:       Vec<AnswerRecord>,
     /// List of authority records in the DNS message.
-    pub authorities:   Vec<Answer>,
+    pub authorities:   Vec<AnswerRecord>,
     /// List of additional record in the DNS message.
-    pub additionals:   Vec<Answer>,
+    pub additionals:   Vec<AnswerRecord>,
 }
 
 
 /// Errors that may occur during buffer operations.
 #[derive(Debug)]
 pub enum DnsError {
-    EndOfBuffer,
+    InvalidField,
     SocketError,
     IOError(String),
     InvalidRData,
