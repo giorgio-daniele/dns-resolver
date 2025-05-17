@@ -1,3 +1,5 @@
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 /// DNS message header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
@@ -52,6 +54,15 @@ pub struct Question {
     pub qclass: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RData {
+    A(Ipv4Addr),
+    AAAA(Ipv6Addr),
+    NS(String),
+    CNAME(String),
+    EMPTY([u8; 0])
+}
+
 /// A DNS answer record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
@@ -66,7 +77,7 @@ pub struct Answer {
     /// Length of the resource data.
     pub length: u16,
     /// Raw resource data (e.g., IP address in bytes).
-    pub rdata: Vec<u8>,
+    pub rdata: RData,
 }
 
 /// A parsed DNS message.
@@ -91,88 +102,88 @@ pub enum DnsError {
     EndOfBuffer,
     SocketError,
     IOError(String),
-    UnsupportedRecordType
+    InvalidRData,
 }
 
 
-use std::fmt::{self, Display, Formatter};
+// use std::{fmt::{self, Display, Formatter}, net::{Ipv4Addr, Ipv6Addr}};
 
-impl Display for Flags {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "    {:<7}= {}", "qr",     self.qr)?;
-        writeln!(f, "    {:<7}= {}", "opcode", self.opcode)?;
-        writeln!(f, "    {:<7}= {}", "aa",     self.aa)?;
-        writeln!(f, "    {:<7}= {}", "tc",     self.tc)?;
-        writeln!(f, "    {:<7}= {}", "rd",     self.rd)?;
-        writeln!(f, "    {:<7}= {}", "ra",     self.ra)?;
-        writeln!(f, "    {:<7}= {}", "z",      self.z)?;
-        writeln!(f, "    {:<7}= {}", "rcode",  self.rcode)
-    }
-}
+// impl Display for Flags {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         writeln!(f, "    {:<7}= {}", "qr",     self.qr)?;
+//         writeln!(f, "    {:<7}= {}", "opcode", self.opcode)?;
+//         writeln!(f, "    {:<7}= {}", "aa",     self.aa)?;
+//         writeln!(f, "    {:<7}= {}", "tc",     self.tc)?;
+//         writeln!(f, "    {:<7}= {}", "rd",     self.rd)?;
+//         writeln!(f, "    {:<7}= {}", "ra",     self.ra)?;
+//         writeln!(f, "    {:<7}= {}", "z",      self.z)?;
+//         writeln!(f, "    {:<7}= {}", "rcode",  self.rcode)
+//     }
+// }
 
-impl Display for Header {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Header:")?;
-        writeln!(f, "  {:<9}= 0x{:04X} ({})", "id", self.id, self.id)?;
-        writeln!(f, "  flags")?;
-        write!(f, "{}", self.flags)?;
-        writeln!(f, "  {:<9}= {}", "qd_count", self.qd_count)?;
-        writeln!(f, "  {:<9}= {}", "an_count", self.an_count)?;
-        writeln!(f, "  {:<9}= {}", "ns_count", self.ns_count)?;
-        writeln!(f, "  {:<9}= {}", "ar_count", self.ar_count)
-    }
-}
+// impl Display for Header {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         writeln!(f, "Header:")?;
+//         writeln!(f, "  {:<9}= 0x{:04X} ({})", "id", self.id, self.id)?;
+//         writeln!(f, "  flags")?;
+//         write!(f, "{}", self.flags)?;
+//         writeln!(f, "  {:<9}= {}", "qd_count", self.qd_count)?;
+//         writeln!(f, "  {:<9}= {}", "an_count", self.an_count)?;
+//         writeln!(f, "  {:<9}= {}", "ns_count", self.ns_count)?;
+//         writeln!(f, "  {:<9}= {}", "ar_count", self.ar_count)
+//     }
+// }
 
-impl Display for Question {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "  - {:<7}= {}", "qname", self.qname)?;
-        writeln!(f, "    {:<7}= {}", "qtype", self.qtype)?;
-        writeln!(f, "    {:<7}= {}", "qclass", self.qclass)
-    }
-}
+// impl Display for Question {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         writeln!(f, "  - {:<7}= {}", "qname", self.qname)?;
+//         writeln!(f, "    {:<7}= {}", "qtype", self.qtype)?;
+//         writeln!(f, "    {:<7}= {}", "qclass", self.qclass)
+//     }
+// }
 
-impl Display for Answer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "  - {:<7}= {}", "aname", self.aname)?;
-        writeln!(f, "    {:<7}= {}", "atype", self.atype)?;
-        writeln!(f, "    {:<7}= {}", "aclass", self.aclass)?;
-        writeln!(f, "    {:<7}= {}", "ttl", self.ttl)?;
-        writeln!(f, "    {:<7}= {}", "rdlength", self.length)?;
-        write!(f,   "    {:<7}= ", "rdata")?;
-        if self.rdata.is_empty() {
-            writeln!(f, "<empty>")
-        } else {
-            for (i, byte) in self.rdata.iter().enumerate() {
-                if i > 0 && i % 16 == 0 {
-                    writeln!(f)?;
-                    write!(f, "              ")?; // Align continuation lines
-                }
-                write!(f, "{:02X} ", byte)?;
-            }
-            writeln!(f)
-        }
-    }
-}
+// impl Display for Answer {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         writeln!(f, "  - {:<7}= {}", "aname", self.aname)?;
+//         writeln!(f, "    {:<7}= {}", "atype", self.atype)?;
+//         writeln!(f, "    {:<7}= {}", "aclass", self.aclass)?;
+//         writeln!(f, "    {:<7}= {}", "ttl", self.ttl)?;
+//         writeln!(f, "    {:<7}= {}", "rdlength", self.length)?;
+//         write!(f,   "    {:<7}= ", "rdata")?;
+//         if self.rdata.is_empty() {
+//             writeln!(f, "<empty>")
+//         } else {
+//             for (i, byte) in self.rdata.iter().enumerate() {
+//                 if i > 0 && i % 16 == 0 {
+//                     writeln!(f)?;
+//                     write!(f, "              ")?; // Align continuation lines
+//                 }
+//                 write!(f, "{:02X} ", byte)?;
+//             }
+//             writeln!(f)
+//         }
+//     }
+// }
 
-impl Display for Dns {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.header)?;
-        writeln!(f, "Questions:")?;
-        if self.questions.is_empty() {
-            writeln!(f, "  <none>")?;
-        } else {
-            for q in &self.questions {
-                write!(f, "{}", q)?;
-            }
-        }
-        writeln!(f, "Answers:")?;
-        if self.answers.is_empty() {
-            writeln!(f, "  <none>")?;
-        } else {
-            for a in &self.answers {
-                write!(f, "{}", a)?;
-            }
-        }
-        Ok(())
-    }
-}
+// impl Display for Dns {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         writeln!(f, "{}", self.header)?;
+//         writeln!(f, "Questions:")?;
+//         if self.questions.is_empty() {
+//             writeln!(f, "  <none>")?;
+//         } else {
+//             for q in &self.questions {
+//                 write!(f, "{}", q)?;
+//             }
+//         }
+//         writeln!(f, "Answers:")?;
+//         if self.answers.is_empty() {
+//             writeln!(f, "  <none>")?;
+//         } else {
+//             for a in &self.answers {
+//                 write!(f, "{}", a)?;
+//             }
+//         }
+//         Ok(())
+//     }
+// }

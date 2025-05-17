@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
-use crate::dns::{Buffer, Dns, DnsError};
+use crate::dns::{Answer, Buffer, Dns, DnsError, RData};
 
 pub async fn proc(dns: Dns, addr: SocketAddr) -> Result<(), DnsError> {
     // Make the request mutable
@@ -10,7 +10,14 @@ pub async fn proc(dns: Dns, addr: SocketAddr) -> Result<(), DnsError> {
     dns.header.flags.rd = false;
 
     // Add EDNS0 OPT record to support larger UDP payloads
-    dns.add_opt_record(4096);
+    dns.add_additional(Answer {
+        aname:  String::new(),              // root domain (empty)
+        atype:  41,                         // OPT type
+        aclass: 4096,                       // UDP payload size
+        ttl:    0,                          // Extended RCODE and flags usually zero
+        length: 0,                          // No data in RDATA for basic OPT record
+        rdata:  RData::EMPTY([]),           // empty rdata
+    });
 
     // Generate a socket and send data
     let data = dns.encode().data;
@@ -36,18 +43,29 @@ pub async fn proc(dns: Dns, addr: SocketAddr) -> Result<(), DnsError> {
             DnsError::IOError(
                 String::from("can't read dns packet from root")))?;
 
-    /*
-     * Once the DNS resolver has received the reply from the root server,
-     * the DNS packet should contain in Authoritative section the list of
-     * name servers - the final holder of the IP of the domain the client
-     * is looking for. Usually, there are no answers
-     */
 
-    let dns = Dns::decode(&mut Buffer::new(buf[..size].to_vec()))?;
+    let res = Dns::decode(&mut Buffer::new(buf[..size].to_vec()))?;
 
-    for item in dns.authorities {
-        println!("NAME={} CLASS={} TYPE={}", item.aname, item.aclass, item.atype)
+    for answer in res.additionals {
+        println!("NAME={} CLASS={} TYPE={} RDATA={:?}", 
+            answer.aname,
+            answer.aclass, 
+            answer.atype, 
+            answer.rdata);
     }
+
+    // for answer in res.authorities {
+
+    //     println!("NAME={} CLASS={} TYPE={} RDATA={:?}", 
+    //         answer.aname,
+    //         answer.aclass, 
+    //         answer.atype, 
+    //         answer.rdata);
+    // }
+
+    // for item in dns.additionals {
+    //     println!("NAME={} CLASS={} TYPE={}", item.aname, item.aclass, item.atype)
+    // }
 
     // // You can then decode or process the response here if needed
     // println!("{:#?}", Dns::decode(&mut Buffer::new(buf.to_vec())));
