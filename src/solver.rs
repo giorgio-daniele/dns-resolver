@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use rand::seq::IndexedRandom;
 use tokio::net::UdpSocket;
 use crate::dns::{AnswerRecord, Buffer, Dns, DnsError, RData};
 
@@ -15,7 +15,7 @@ async fn send_recv(
         .await
         .map_err(|_| DnsError::SocketError)?;
 
-    sock.send_to(msg, format!("{}", addr))
+    sock.send_to(msg, addr)
         .await
         .map_err(|_| DnsError::IOError(String::from("can't send DNS packet")))?;
 
@@ -27,176 +27,150 @@ async fn send_recv(
     Ok((buf, size))
 }
 
-fn process_records(map: &mut HashMap<String, Vec<RData>>, records: &Vec<AnswerRecord>) {
+fn process_records(map: &mut HashMap<String, Vec<RData>>, records: &[AnswerRecord]) {
     for a in records {
         map
             .entry(a.aname.clone())
-            .and_modify(|v| v.push(a.rdata.clone()))
-            .or_insert_with(|| vec![a.rdata.clone()]);
+            .and_modify(|v| 
+                v.push(a.rdata.clone()))
+            .or_insert_with(|| 
+                vec![a.rdata.clone()]);
     }
 }
 
-pub async fn proc(mut dns: Dns, addr: SocketAddr) -> Result<Vec<u8>, DnsError> {
-    /*
-     * Send request to root server with EDNS0 and recursion disabled.
-     * Collect authoritative and additional records.
-     * Query the first resolved A record from additional records.
-     */
-    dns.header.flags.rd = false;
 
-    /*
-     * Root server response storage
-     * 
-     * - root_answers: Typically empty, root servers rarely return direct answers.
-     * - root_authorities: Maps queried domain (e.g., "com") to name servers 
-     *   responsible for that TLD.
-     * - root_additionals: Maps those name servers to their corresponding IP 
-     *   addresses.
-     */
-    let mut _root_answers    : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut root_authorities : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut root_additionals : HashMap<String, Vec<RData>> = HashMap::new();
+fn extract_server_ip(
+     additionals: &[AnswerRecord]
+) -> Result<(String, String), DnsError> {
 
-    /*
-     * TLD server response storage
-     * 
-     * - tld_answers: Usually empty, TLD servers also delegate to authoritative 
-     *   servers.
-     * - tld_authorities: Maps domain (e.g., "example.com") to authoritative 
-     *   name servers.
-     * - tld_additionals: Maps those name servers to their IP addresses.
-     */
-    let mut _tld_answers    : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut tld_authorities : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut tld_additionals : HashMap<String, Vec<RData>> = HashMap::new();
+    let mut map: HashMap<String, Vec<RData>> = HashMap::new();
+    process_records(&mut map, additionals);
 
-    /*
-     * Authoritative server response storage
-     * 
-     * - auth_answers: Contains the final answer(s), such as A/AAAA or CNAME 
-     *   records.
-     * - auth_authorities: May include SOA (Start of Authority) or further 
-     *   delegation data.
-     * - auth_additionals: Related additional records (e.g., A records of 
-     *   NS entries).
-     */
-    let mut auth_answers     : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut auth_authorities : HashMap<String, Vec<RData>> = HashMap::new();
-    let mut auth_additionals : HashMap<String, Vec<RData>> = HashMap::new();
-
-    // Add EDNS0 OPT record to support larger UDP payloads
-    dns.add_additional(AnswerRecord {
-        aname:  String::new(),  // root domain
-        atype:  41,             // OPT
-        aclass: 4096,           // UDP payload size
-        ttl:    0,              // extended flags
-        length: 0,              // no RDATA
-        rdata:  RData::EMPTY([]),
-    });
-
-    /*
-     * 
-     * 
-     * Query the ROOT Server
-     * 
-     * 
-     */
-    let msg        = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), "198.41.0.4:53").await?;
-    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
-
-    // Fill the maps associated to root reply
-    process_records(& mut root_authorities, &resp.authorities);
-    process_records(& mut root_additionals, &resp.additionals);
-
-    let addr = 
-        root_additionals
-        .iter()
-        .find_map(|(_, values)| {
-            values.iter().find_map(|r| {
-                if let RData::A(ipv4) = r {
-                    Some(ipv4.to_string() + ":53")
+    map.iter()
+        .filter(|(server, _)| 
+            !server.is_empty() && server.as_str() != ".")
+        .find_map(|(server, records)| {
+            records.iter().find_map(|record| {
+                if let RData::A(ipv4) = record {
+                    Some((server.clone(), format!("{}:53", ipv4)))
                 } else {
                     None
                 }
+            })
         })
-    })
         .ok_or_else(|| 
-            DnsError::IOError(String::from("no A record found in additional records")))?;
-    /*
-     * 
-     * 
-     * Query the TLD Server
-     * 
-     * 
-     */
-    let msg        = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), &addr).await?;
-    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+            DnsError::FailedResolution(
+                String::from("no IPv4 address found in additionals")))
+}
+
+pub async fn resolve_ip(dns: &mut Dns) -> Result<Vec<u8>, DnsError> {
+
+     // Disable recursion
+     dns.header.flags.rd = false;
+ 
+     // Add EDNS0 OPT record for larger UDP payload
+     dns.add_additional(AnswerRecord {
+         aname:  String::new(),
+         atype:  41,    // OPT record type
+         aclass: 4096,  // UDP payload size
+         ttl:    0,
+         length: 0,
+         rdata: RData::EMPTY([]),
+     });
+
+     let root_servers = [
+        "198.41.0.4:53",    // A
+        "199.9.14.201:53",  // B
+        "192.33.4.12:53",   // C
+        "199.7.91.13:53",   // D
+        "192.203.230.10:53",// E
+        "192.5.5.241:53",   // F
+        "192.112.36.4:53",  // G
+        "198.97.190.53:53", // H
+        "192.36.148.17:53", // I
+        "192.58.128.30:53", // J
+        "193.0.14.129:53",  // K
+        "199.7.83.42:53",   // L
+        "202.12.27.33:53",  // M
+    ];
     
-    // Fill the maps associated to tld reply
-    process_records(& mut tld_authorities, &resp.authorities);
-    process_records(& mut tld_additionals, &resp.additionals);
+    
+    // Query Root server for TLD NS
+    let root_server = {
+        let mut rng = rand::rng();
+        root_servers.choose(&mut rng).unwrap().to_owned()
+    };
 
-    /*
-     * 
-     * 
-     * Query the Authoritative Server
-     * 
-     * 
-     */
-    let addr = 
-        tld_additionals
-        .iter()
-        .find_map(|(_, values)| {
-            values.iter().find_map(|r| {
-                if let RData::A(ipv4) = r {
-                    Some(ipv4.to_string() + ":53")
-                } else {
-                    None
-                }
-        })
-    })
-        .ok_or_else(|| 
-            DnsError::IOError(String::from("no A record found in additional records")))?;
+    let (resp, len) = send_recv(dns.encode()?.get_data(), root_server).await?;
+    let root_reply = Dns::decode(&mut Buffer::new(resp[..len].to_vec()))?;
 
-    let msg        = dns.encode()?;
-    let (res, len) = send_recv(msg.get_data(), &addr).await?;
-    let resp       = Dns::decode(&mut Buffer::new(res[..len].to_vec()))?;
+    // println!("[DEBUG]: Query to root server {}", root_server);
+    // println!("[DEBUG]: an_count={}", root_reply.answers.len());
+    // println!("[DEBUG]: ns_count={}", root_reply.authorities.len());
+    // println!("[DEBUG]: ar_count={}", root_reply.additionals.len());
 
-    process_records(& mut auth_answers,     &resp.answers);
-    process_records(& mut auth_authorities, &resp.authorities);
-    process_records(& mut auth_additionals, &resp.additionals);    
+    // Query TLD server for Authoritative
+    let (tld_server_name, tld_server_addr) = extract_server_ip(&root_reply.additionals)?;
+    let (resp, len) = send_recv(dns.encode()?.get_data(), &tld_server_addr).await?;
+    let tld_reply = Dns::decode(&mut Buffer::new(resp[..len].to_vec()))?;
 
-    // println!("{:#?}", resp.answers);
-    // println!("-----------");
-    // println!("{:#?}", auth_authorities);
-    // println!("-----------");
-    // println!("{:#?}", auth_additionals);
-    // println!("-----------");
-    // println!("-----------");
+    // println!("[DEBUG]: Query to TLD server {} ({})", tld_server_name, tld_server_addr);
+    // println!("[DEBUG]: an_count={}", tld_reply.answers.len());
+    // println!("[DEBUG]: ns_count={}", tld_reply.authorities.len());
+    // println!("[DEBUG]: ar_count={}", tld_reply.additionals.len());
 
-    // Finalize and send DNS response to client
-    // Mark as response
+    // Query TLD server for getting the IP address
+    let (auth_server_name, auth_server_addr) = extract_server_ip(&tld_reply.additionals)?;
+    let (resp, len) = send_recv(dns.encode()?.get_data(), &auth_server_addr).await?;
+    let auth_reply = Dns::decode(&mut Buffer::new(resp[..len].to_vec()))?;
+
+    // println!("[DEBUG]: Query to authoritative server {} ({})", auth_server_name, auth_server_addr);
+    // println!("[DEBUG]: an_count={}", auth_reply.answers.len());
+    // println!("[DEBUG]: ns_count={}", auth_reply.authorities.len());
+    // println!("[DEBUG]: ar_count={}", auth_reply.additionals.len());
+
+    // Create a fresh DNS response based on initial query, but marking flags accordingly
+    dns.header.id          = auth_reply.header.id; // Keep the last server's ID for consistency
     dns.header.flags.qr    = true;
-    dns.header.flags.aa    = true;   // Authoritative if final server was authoritative
-    dns.header.flags.ra    = false;  // No recursion
-    dns.header.flags.rcode = 0;      // No error
+    dns.header.flags.aa    = true;   // authoritative answer
+    dns.header.flags.ra    = false;  // no recursion
+    dns.header.flags.rcode = 0;      // no error
 
-    // Copy answer sections from final resolved response
-    dns.answers     = resp.answers.clone();
-    dns.authorities = resp.authorities.clone();
-    dns.additionals = resp.additionals.clone();
+    // Copy final answer sections
+    dns.answers     = auth_reply.answers;
+    dns.authorities = auth_reply.authorities;
+    dns.additionals = auth_reply.additionals;
 
-    // Update section counts
-    dns.header.an_count = dns.answers.len()     as u16;
+    // Update counts
+    dns.header.an_count = dns.answers.len() as u16;
     dns.header.ns_count = dns.authorities.len() as u16;
     dns.header.ar_count = dns.additionals.len() as u16;
 
-    println!("-----------");
-    println!("{:#?}", dns);
-    println!("-----------");
+    // AnswerRecord {
+    //     aname: "www.polito.it",
+    //     atype: 5,
+    //     aclass: 1,
+    //     ttl: 3600,
+    //     length: 12,
+    //     rdata: CNAME(
+    //         "webvip-01.polito.it",
+    //     ),
+    // },
 
-    let resp = dns.encode()?;
-    return Ok(resp.get_data().to_vec());
+    // for a in &dns.answers {
+    //     println!("[DEBUG]: {} {} {} {} {} {}", 
+    //         a.aname,
+    //         a.atype,
+    //         a.aclass,
+    //         a.ttl,
+    //         a.length,
+    //         a.rdata);
+    // }
+    // println!("\n");
+
+
+    // Encode and return
+    let encoded = dns.encode()?;
+    Ok(encoded.get_data().to_vec())
+    //Ok([0u8; 1].to_vec())
 }

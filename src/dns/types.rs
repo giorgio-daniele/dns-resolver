@@ -1,3 +1,4 @@
+use core::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// DNS message header.
@@ -63,6 +64,18 @@ pub enum RData {
     EMPTY([u8; 0])
 }
 
+impl fmt::Display for RData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RData::A(ipv4)    => write!(f, "A({})", ipv4),
+            RData::AAAA(ipv6) => write!(f, "AAAA({})", ipv6),
+            RData::NS(name)     => write!(f, "NS({})", name),
+            RData::CNAME(name)  => write!(f, "CNAME({})", name),
+            RData::EMPTY(_)              => write!(f, "EMPTY"),
+        }
+    }
+}
+
 /// A DNS answer record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerRecord {
@@ -103,6 +116,7 @@ pub enum DnsError {
     SocketError,
     IOError(String),
     InvalidRData,
+    FailedResolution(String),
 }
 
 

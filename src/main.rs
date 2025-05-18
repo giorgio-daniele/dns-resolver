@@ -1,7 +1,6 @@
 use dns::{Buffer, Dns, DnsError};
-use solver::proc;
-use tokio::
-    net::UdpSocket;
+use solver::resolve_ip;
+use tokio::net::UdpSocket;
 
 mod dns;
 mod solver;
@@ -29,9 +28,9 @@ async fn main() -> Result<(), DnsError> {
         // Genereate the DNS message and pass it to 
         // the handler. The handler will be executed
         // within a coroutine in tokio context
-        if let Ok(dns) = Dns::decode( &mut Buffer::new(buf[..size].to_vec())) {
+        if let Ok(mut dns) = Dns::decode( &mut Buffer::new(buf[..size].to_vec())) {
             let handle = tokio::spawn(async move {
-                proc(dns, addr).await
+                resolve_ip(&mut dns).await
             });
 
             match handle.await {
