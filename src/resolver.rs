@@ -29,7 +29,7 @@ pub async fn resolve(
      */
 
     let mut buffer = [0u8; 4096];
-    let dns = Dns::new_ipv4_query(domain, 0x1234);
+    let dns = Dns::new_a_record(domain, 0x1234);
     contact::contact(&dns.encode()?.data, &format!("{}:53", address), &mut buffer).await?;
     let dns = Dns::decode(&mut DnsReadBuffer::new(&buffer))?;
 

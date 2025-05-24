@@ -5,9 +5,9 @@ mod resolver;
 mod types;
 
 use resolver::resolve;
-use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::UdpSocket, sync::Mutex};
-use types::{AnswerRecord, Dns, DnsError, DnsReadBuffer, RData, Type};
+use types::{Dns, DnsError, DnsReadBuffer};
 
 const ROOT_SERVER: &str = "198.41.0.4";
 const MAX_DEPTH: usize = 20;
@@ -30,11 +30,11 @@ async fn main() -> Result<(), DnsError> {
             .recv_from(&mut buf)
             .await
             .map_err(|_| DnsError::SocketError)?;
-        let socket = Arc::clone(&socket);
-        let data = buf[..len].to_vec();
 
+
+        let socket = Arc::clone(&socket);
         tokio::spawn(async move {
-            if let Err(e) = handle_request(socket, client, data).await {
+            if let Err(e) = handle_request(socket, client,  buf[..len].to_vec()).await {
                 eprintln!("Error handling request from {}: {:?}", client, e);
             }
         });
@@ -48,66 +48,32 @@ async fn handle_request(
 ) -> Result<(), DnsError> {
 
 
-    let req = Dns::decode(&mut DnsReadBuffer::new(&buffer))?;
-    let dns = req
+    /*
+     * 
+     * 
+     * Decode the DNS request from the buffer, then extract the first
+     * question from it (if it exists)
+     * 
+     * 
+     */
+
+    let mut dns = Dns::decode(&mut DnsReadBuffer::new(&buffer))?;
+    let qrc = dns
         .questions
         .first()
-        .ok_or_else(|| DnsError::IOError("No question in request".into()))?;
+        .cloned() // Clone the QueryRecord to avoid borrowing dns
+        .ok_or_else(|| DnsError::IOError("no questions".into()))?;
+    /*
+     * 
+     * Get the answers associated to the question and then add to the original
+     * request the list of the responses
+     * 
+     */
+    
+    let answers = resolve(&qrc.qname, ROOT_SERVER, MAX_DEPTH).await?;
+    dns.add_answers(&qrc, answers);
 
-    let answers = resolve(&dns.qname, ROOT_SERVER, MAX_DEPTH).await?;
-
-
-    println!("{:?}", answers);
-
-    // Generate the result
-    let mut res = req.clone();
-    res.header.flags.qr = true;                     // Mark as response
-    res.header.flags.rd = req.header.flags.rd;      // Copy Recursion Desired
-    res.header.flags.ra = true;                     // Recursion Available
-    res.header.flags.z  = 0;
-    res.answers.clear();
-
-    if !answers.is_empty() {
-        res.header.flags.rcode = 0; // No error
-        res.header.an_count    = answers.len() as u16;
-        res.answers            = answers
-                .into_iter()
-                .map(|rdata| {
-                    let atype = match rdata {
-                        RData::A(_)       => Type::A     as u16,
-                        RData::AAAA(_)    => Type::AAAA  as u16,
-                        RData::CNAME(_)   => Type::CNAME as u16,
-                        RData::NS(_)      => Type::NS    as u16,
-                        RData::MX { .. }  => Type::MX    as u16,
-                        RData::TXT(_)     => Type::TXT   as u16,
-                        RData::SOA { .. } => Type::SOA   as u16,
-                        RData::PTR(_)     => Type::PTR   as u16,
-                        RData::EMPTY(_)   => 0,
-                    };
-
-                    AnswerRecord {
-                        aname:  dns.qname.clone(),
-                        atype,
-                        aclass: dns.qclass,
-                        ttl:    300,
-                        length: rdata.record_length(),
-                        rdata,
-                    }
-                })
-                .collect();
-    } else {
-        res.header.flags.rcode = 3; // NXDOMAIN
-        res.header.an_count    = 0;
-    }
-
-
-    let enc = res.encode()?;
-
-    println!("\n\n\n");
-
-    println!("{:#?}", req);
-    println!();
-    println!("{:#?}", res);
+    let enc = dns.encode()?;
 
     // Send the response
     socket
