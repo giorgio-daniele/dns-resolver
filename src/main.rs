@@ -68,9 +68,9 @@ async fn process(
          ipv6_addresses, 
          cnonical_names) = resolve(&qrc.qname, ROOT_SERVER, MAX_DEPTH).await?;
 
-    println!("IPv4 addresses={:?}", ipv4_addresses);
-    println!("IPv6 addresses={:?}", ipv6_addresses);
-    println!("Server Names={:?}",   cnonical_names);
+    // println!("IPv4 addresses={:?}", ipv4_addresses);
+    // println!("IPv6 addresses={:?}", ipv6_addresses);
+    // println!("Server Names={:?}",   cnonical_names);
 
     req.header.flags = Flags {
         qr:    true,  // This is a response

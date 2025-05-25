@@ -1,5 +1,14 @@
 use crate::types::{
-    AnswerRecord, Dns, DnsError, DnsReadBuffer, DnsWriteBuffer, Flags, Header, QueryRecord, RData, Type,
+    AnswerRecord, 
+    Dns, 
+    DnsError,
+    DnsReadBuffer, 
+    DnsWriteBuffer, 
+    Flags, 
+    Header, 
+    QueryRecord, 
+    RData, 
+    Type,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -87,7 +96,7 @@ impl Dns {
     }
 
     /// Decodes a list of query records from the buffer.
-    fn decode_queries(
+    fn decode_questions(
         buf:   &mut DnsReadBuffer, 
         count: u16) 
     -> Result<Vec<QueryRecord>, DnsError> {
@@ -102,7 +111,7 @@ impl Dns {
     }
 
     /// Decodes a list of answer or authority/additional records.
-    fn decode_records(
+    fn decode_answers(
         buf:   &mut DnsReadBuffer, 
         count: u16) 
     -> Result<Vec<AnswerRecord>, DnsError> {
@@ -123,11 +132,11 @@ impl Dns {
     }
 
     /// Encodes a list of answer, authority, or additional records.
-    fn encode_records(
+    fn encode_answers(
         buffer:  &mut DnsWriteBuffer,
-        records: &[AnswerRecord],
+        answers: &[AnswerRecord],
     ) -> Result<(), DnsError> {
-        for a in records {
+        for a in answers {
             if a.atype == 41 {
                 buffer.write_u8(0);
             } else {
@@ -157,43 +166,42 @@ impl Dns {
                     buf.write_u16(seg);
                 }
             }
-            RData::NS(name) |
-            RData::CNAME(name) |
-            RData::PTR(name) => {
+            RData::NS(name) | RData::CNAME(name)  => {
+            // RData::NS(name) | RData::CNAME(name) | RData::PTR(name) => {
                 buf.write_str(name);
             }
-            RData::TXT(text) => {
-                let bytes = text.as_bytes();
-                if bytes.len() > 255 {
-                    return Err(DnsError::InvalidField);
-                }
-                buf.write_u8(bytes.len() as u8);
-                buf.write_bytes(bytes);
-            }
-            RData::MX {
-                preference,
-                exchange,
-            } => {
-                buf.write_u16(*preference);
-                buf.write_str(exchange);
-            }
-            RData::SOA {
-                mname,
-                rname,
-                serial,
-                refresh,
-                retry,
-                expire,
-                minimum,
-            } => {
-                buf.write_str(mname);
-                buf.write_str(rname);
-                buf.write_u32(*serial);
-                buf.write_u32(*refresh);
-                buf.write_u32(*retry);
-                buf.write_u32(*expire);
-                buf.write_u32(*minimum);
-            }
+            // RData::TXT(text) => {
+            //     let bytes = text.as_bytes();
+            //     if bytes.len() > 255 {
+            //         return Err(DnsError::InvalidField);
+            //     }
+            //     buf.write_u8(bytes.len() as u8);
+            //     buf.write_bytes(bytes);
+            // }
+            // RData::MX {
+            //     preference,
+            //     exchange,
+            // } => {
+            //     buf.write_u16(*preference);
+            //     buf.write_str(exchange);
+            // }
+            // RData::SOA {
+            //     mname,
+            //     rname,
+            //     serial,
+            //     refresh,
+            //     retry,
+            //     expire,
+            //     minimum,
+            // } => {
+            //     buf.write_str(mname);
+            //     buf.write_str(rname);
+            //     buf.write_u32(*serial);
+            //     buf.write_u32(*refresh);
+            //     buf.write_u32(*retry);
+            //     buf.write_u32(*expire);
+            //     buf.write_u32(*minimum);
+            // }
             RData::EMPTY(data) => {
                 buf.write_bytes(data);
             }
@@ -212,10 +220,10 @@ impl Dns {
         let ar_count  = buf.read_u16().map_err(|_| DnsError::InvalidField)?;
 
         let flags                   = Self::decode_flags(flags_raw);
-        let questions    = Self::decode_queries(buf, qd_count)?;
-        let answers     = Self::decode_records(buf, an_count)?;
-        let authorities = Self::decode_records(buf, ns_count)?;
-        let additionals = Self::decode_records(buf, ar_count)?;
+        let questions    = Self::decode_questions(buf, qd_count)?;
+        let answers     = Self::decode_answers(buf, an_count)?;
+        let authorities = Self::decode_answers(buf, ns_count)?;
+        let additionals = Self::decode_answers(buf, ar_count)?;
 
         Ok(Dns {
             header: Header {
@@ -252,9 +260,9 @@ impl Dns {
             buffer.write_u16(q.qclass);
         }
 
-        Self::encode_records(&mut buffer, &self.answers)?;
-        Self::encode_records(&mut buffer, &self.authorities)?;
-        Self::encode_records(&mut buffer, &self.additionals)?;
+        Self::encode_answers(&mut buffer, &self.answers)?;
+        Self::encode_answers(&mut buffer, &self.authorities)?;
+        Self::encode_answers(&mut buffer, &self.additionals)?;
 
         Ok(buffer)
     }
@@ -341,10 +349,10 @@ impl AnswerRecord {
             RData::AAAA(_)  => Type::AAAA  as u16,
             RData::CNAME(_) => Type::CNAME as u16,
             RData::NS(_)    => Type::NS  as u16,
-            RData::TXT(_)   => Type::TXT as u16,
-            RData::MX {..}  => Type::MX  as u16,
-            RData::SOA {..} => Type::SOA as u16,
-            RData::PTR(_)   => Type::PTR as u16,
+            // RData::TXT(_)   => Type::TXT as u16,
+            // RData::MX {..}  => Type::MX  as u16,
+            // RData::SOA {..} => Type::SOA as u16,
+            // RData::PTR(_)   => Type::PTR as u16,
             RData::EMPTY(_) => 0, // or some fallback
         };
 

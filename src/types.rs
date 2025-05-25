@@ -66,21 +66,21 @@ pub enum RData {
     AAAA(Ipv6Addr),
     NS(String),
     CNAME(String),
-    TXT(String),
-    MX {
-        preference: u16,
-        exchange:   String,
-    },
-    SOA {
-        mname:   String,
-        rname:   String,
-        serial:  u32,
-        refresh: u32,
-        retry:   u32,
-        expire:  u32,
-        minimum: u32,
-    },
-    PTR(String),
+    // TXT(String),
+    // MX {
+    //     preference: u16,
+    //     exchange:   String,
+    // },
+    // SOA {
+    //     mname:   String,
+    //     rname:   String,
+    //     serial:  u32,
+    //     refresh: u32,
+    //     retry:   u32,
+    //     expire:  u32,
+    //     minimum: u32,
+    // },
+    // PTR(String),
     EMPTY([u8; 0]), // Generic fallback
 }
 
