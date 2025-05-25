@@ -69,15 +69,15 @@ pub enum RData {
     TXT(String),
     MX {
         preference: u16,
-        exchange: String,
+        exchange:   String,
     },
     SOA {
-        mname: String,
-        rname: String,
-        serial: u32,
+        mname:   String,
+        rname:   String,
+        serial:  u32,
         refresh: u32,
-        retry: u32,
-        expire: u32,
+        retry:   u32,
+        expire:  u32,
         minimum: u32,
     },
     PTR(String),
@@ -87,43 +87,118 @@ pub enum RData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Type {
-    A = 1,
-    NS = 2,
+    A     = 1,
+    NS    = 2,
     CNAME = 5,
-    MX = 15,
-    TXT = 16,
-    AAAA = 28,
-    PTR = 12,
-    SOA = 6,
+    MX    = 15,
+    TXT   = 16,
+    AAAA  = 28,
+    PTR   = 12,
+    SOA   = 6,
 }
 
 impl Type {
     pub fn from_u16(value: u16) -> Option<Type> {
         match value {
-            1 => Some(Type::A),
-            2 => Some(Type::NS),
-            5 => Some(Type::CNAME),
-            6 => Some(Type::SOA),
+            1  => Some(Type::A),
+            2  => Some(Type::NS),
+            5  => Some(Type::CNAME),
+            6  => Some(Type::SOA),
             12 => Some(Type::PTR),
             15 => Some(Type::MX),
             16 => Some(Type::TXT),
             28 => Some(Type::AAAA),
-            _ => None,
+            _  => None,
         }
     }
 }
 
 impl RData {
-    pub fn record_length(&self) -> u16 {
+    /// Returns the length in bytes of the RData payload.
+    ///
+    /// For `A` and `AAAA` records, this is fixed.
+    /// For domain name records like `CNAME` and `NS`, length includes 
+    /// label length plus 2 bytes.
+    /// For other variants, returns 0.
+    pub fn len(&self) -> u16 {
         match self {
-            RData::A(_) => 4,
-            RData::AAAA(_) => 16,
-            RData::CNAME(s) => s.len() as u16 + 2, // Roughly, domain encoding
-            RData::NS(s) => s.len() as u16 + 2,
-            _ => 0,
+            RData::A(_)              => 4,
+            RData::AAAA(_)           => 16,
+            RData::CNAME(s) => s.len() as u16 + 2,
+            RData::NS(s)    => s.len() as u16 + 2,
+            _                        => 0,
         }
     }
+
+    /// Returns the contained IPv4 address if the record is an `A` record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// if let Some(ipv4) = rdata.as_a() {
+    ///     println!("IPv4 address: {}", ipv4);
+    /// }
+    /// ```
+    pub fn as_a(&self) -> Option<Ipv4Addr> {
+        if let RData::A(ip) = self {
+            Some(*ip)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the contained IPv6 address if the record is an `AAAA` record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// if let Some(ipv6) = rdata.as_aaaa() {
+    ///     println!("IPv6 address: {}", ipv6);
+    /// }
+    /// ```
+    pub fn as_aaaa(&self) -> Option<std::net::Ipv6Addr> {
+        if let RData::AAAA(ipv6) = self {
+            Some(*ipv6)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the contained domain name if the record is an `NS` (name server) record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// if let Some(ns_name) = rdata.as_ns() {
+    ///     println!("Name server domain: {}", ns_name);
+    /// }
+    /// ```
+    pub fn as_ns(&self) -> Option<&str> {
+        if let RData::NS(name) = self {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+     /// Returns the contained domain name if the record is an `CNAME` (name server) record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// if let Some(cname) = rdata.as_cname() {
+    ///     println!("Cnanonical server name: {}", cname);
+    /// }
+    /// ```
+    pub fn as_cname(&self) -> Option<&str> {
+        if let RData::CNAME(name) = self {
+            Some(name)
+        } else {
+            None
+        }
+    }   
 }
+
 
 /// A DNS answer record.
 ///

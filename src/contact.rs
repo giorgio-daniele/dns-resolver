@@ -3,10 +3,11 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
 pub async fn contact<'a>(
-    dns: &[u8],           // The packet to be sent
-    address: &str,        // The remote server address
-    buffer: &'a mut [u8], // The buffer where store the result
+    dns:     &[u8],           // The packet to be sent
+    address: &str,            // The remote server address
+    buffer:  &'a mut [u8],    // The buffer where store the result
 ) -> Result<&'a [u8], DnsError> {
+
     // Parse the address into a SocketAddr
     let addr: SocketAddr = address.parse().map_err(|_| DnsError::SocketError)?;
 

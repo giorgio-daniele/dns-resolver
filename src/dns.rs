@@ -31,7 +31,11 @@ impl Dns {
     }
 
     /// Decodes a resource data section based on type and length.
-    fn decode_rdata(buf: &mut DnsReadBuffer, atype: u16, length: u16) -> Result<RData, DnsError> {
+    fn decode_rdata(
+        buf:    &mut DnsReadBuffer, 
+        atype:  u16, 
+        length: u16) 
+    -> Result<RData, DnsError> {
         match atype {
             1 => {
                 let raw = buf.read_n_bytes(length as usize).map_err(|_| DnsError::InvalidField)?;
@@ -83,7 +87,10 @@ impl Dns {
     }
 
     /// Decodes a list of query records from the buffer.
-    fn decode_queries(buf: &mut DnsReadBuffer, count: u16) -> Result<Vec<QueryRecord>, DnsError> {
+    fn decode_queries(
+        buf:   &mut DnsReadBuffer, 
+        count: u16) 
+    -> Result<Vec<QueryRecord>, DnsError> {
         let mut records = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let qname  = buf.read_str().map_err(|_| DnsError::InvalidField)?;
@@ -95,7 +102,10 @@ impl Dns {
     }
 
     /// Decodes a list of answer or authority/additional records.
-    fn decode_records(buf: &mut DnsReadBuffer, count: u16) -> Result<Vec<AnswerRecord>, DnsError> {
+    fn decode_records(
+        buf:   &mut DnsReadBuffer, 
+        count: u16) 
+    -> Result<Vec<AnswerRecord>, DnsError> {
         let mut records = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let aname  = buf.read_str().map_err(|_| DnsError::InvalidField)?;
@@ -114,7 +124,7 @@ impl Dns {
 
     /// Encodes a list of answer, authority, or additional records.
     fn encode_records(
-        buffer: &mut DnsWriteBuffer,
+        buffer:  &mut DnsWriteBuffer,
         records: &[AnswerRecord],
     ) -> Result<(), DnsError> {
         for a in records {
@@ -279,7 +289,7 @@ impl Dns {
     }
 
     /// Creates a new DNS IPv4 query for the given domain and ID.
-    pub fn new_a_record(domain: &str, id: u16) -> Self {
+    pub fn new_a_question(domain: &str, id: u16) -> Self {
         let flags = Flags {
             qr:     false,
             opcode: 0,
@@ -314,52 +324,37 @@ impl Dns {
         )
     }
 
-    pub fn add_answers(&mut self, query_record: &QueryRecord, answers: Vec<RData>)  {
-        self.header.flags.qr = true;                     // Mark as response
-        self.header.flags.rd = self.header.flags.rd;     // Copy Recursion Desired
-        self.header.flags.ra = true;                     // Recursion Available
-        self.header.flags.z  = 0;
-        self.answers.clear();
-
-        if !answers.is_empty() {
-            self.header.flags.rcode = 0; // No error
-            self.header.an_count    = answers.len() as u16;
-            self.answers            = answers
-                    .into_iter()
-                    .map(|rdata| {
-                        let atype = match rdata {
-                            RData::A(_)       => Type::A     as u16,
-                            RData::AAAA(_)    => Type::AAAA  as u16,
-                            RData::CNAME(_)   => Type::CNAME as u16,
-                            RData::NS(_)      => Type::NS    as u16,
-                            RData::MX { .. }  => Type::MX    as u16,
-                            RData::TXT(_)     => Type::TXT   as u16,
-                            RData::SOA { .. } => Type::SOA   as u16,
-                            RData::PTR(_)     => Type::PTR   as u16,
-                            RData::EMPTY(_)   => 0,
-                        };
-
-                        AnswerRecord {
-                            aname:  query_record.qname.to_owned(),
-                            atype,
-                            aclass: query_record.qclass,
-                            ttl:    300,
-                            length: rdata.record_length(),
-                            rdata,
-                        }
-                    })
-                    .collect();
-        } else {
-            self.header.flags.rcode = 3; // NXDOMAIN
-            self.header.an_count    = 0;
-        }      
-    }
-
 }
 
 impl QueryRecord {
     /// Creates a new query record with the given name, type, and class.
     pub fn new(qname: String, qtype: u16, qclass: u16) -> Self {
         QueryRecord { qname, qtype, qclass }
+    }
+}
+
+impl AnswerRecord {
+    /// Creates a new answer record from rdata
+    pub fn new(name: String, rdata: RData) -> Self {
+        let atype = match &rdata {
+            RData::A(_)     => Type::A     as u16,
+            RData::AAAA(_)  => Type::AAAA  as u16,
+            RData::CNAME(_) => Type::CNAME as u16,
+            RData::NS(_)    => Type::NS  as u16,
+            RData::TXT(_)   => Type::TXT as u16,
+            RData::MX {..}  => Type::MX  as u16,
+            RData::SOA {..} => Type::SOA as u16,
+            RData::PTR(_)   => Type::PTR as u16,
+            RData::EMPTY(_) => 0, // or some fallback
+        };
+
+        AnswerRecord { 
+            aname:  name,
+            atype:  atype,
+            aclass: 1,        // 1 = IN (Internet)
+            ttl:    300,      // Default TTL
+            length: rdata.len(),
+            rdata:  rdata,
+        } 
     }
 }

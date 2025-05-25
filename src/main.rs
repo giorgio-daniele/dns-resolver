@@ -5,81 +5,106 @@ mod resolver;
 mod types;
 
 use resolver::resolve;
-use std::{net::SocketAddr, sync::Arc};
-use tokio::{net::UdpSocket, sync::Mutex};
-use types::{Dns, DnsError, DnsReadBuffer};
+use std::{collections::HashMap, net::{IpAddr, SocketAddr}, sync::Arc};
+use tokio::{net::UdpSocket};
+use types::{AnswerRecord, Dns, DnsError, DnsReadBuffer, Flags, RData};
 
 const ROOT_SERVER: &str = "198.41.0.4";
 const MAX_DEPTH: usize = 20;
 
 #[tokio::main]
 async fn main() -> Result<(), DnsError> {
-    let socket = Arc::new(Mutex::new(
+
+    // Generate a new UDP socket for listening incoming packets
+    // from clients
+    let sock = Arc::new(
         UdpSocket::bind("127.0.0.1:53")
             .await
             .map_err(|_| DnsError::SocketError)?,
-    ));
+    );
 
-    println!("DNS server listening on 127.0.0.1:53");
     let mut buf = [0u8; 4096];
 
     loop {
-        let (len, client) = socket
-            .lock()
-            .await
+
+        // Read incoming packet from the socket.
+        let (length, addr) = sock
             .recv_from(&mut buf)
             .await
             .map_err(|_| DnsError::SocketError)?;
 
+        let sock_clone = Arc::clone(&sock);
 
-        let socket = Arc::clone(&socket);
+        let data = buf[..length].to_vec();
+
+        // Use an asyncio task, offloading the logic for resolving the IP
+        // address of the requested domain
         tokio::spawn(async move {
-            if let Err(e) = handle_request(socket, client,  buf[..len].to_vec()).await {
-                eprintln!("Error handling request from {}: {:?}", client, e);
+            match async {
+                let mut dns = Dns::decode(&mut DnsReadBuffer::new(&data))?;
+                process(sock_clone, addr, &mut dns).await
+            }.await {
+                Ok(_) => (),
+                Err(e) => eprintln!("DNS request processing error: {:?}", e),
             }
         });
     }
 }
 
-async fn handle_request(
-    socket: Arc<Mutex<UdpSocket>>,
-    client: SocketAddr,
-    buffer: Vec<u8>,
+async fn process(
+    sock:   Arc<UdpSocket>,
+    addr:   SocketAddr,
+    req:    & mut Dns,
 ) -> Result<(), DnsError> {
 
-
-    /*
-     * 
-     * 
-     * Decode the DNS request from the buffer, then extract the first
-     * question from it (if it exists)
-     * 
-     * 
-     */
-
-    let mut dns = Dns::decode(&mut DnsReadBuffer::new(&buffer))?;
-    let qrc = dns
+    // Get the first question from the DNS packet from the client
+    let qrc = req
         .questions
         .first()
-        .cloned() // Clone the QueryRecord to avoid borrowing dns
-        .ok_or_else(|| DnsError::IOError("no questions".into()))?;
-    /*
-     * 
-     * Get the answers associated to the question and then add to the original
-     * request the list of the responses
-     * 
-     */
-    
-    let answers = resolve(&qrc.qname, ROOT_SERVER, MAX_DEPTH).await?;
-    dns.add_answers(&qrc, answers);
+        .cloned()
+        .ok_or_else(|| DnsError::IOError("no questions found".into()))?;
 
-    let enc = dns.encode()?;
+    let (ipv4_addresses, 
+         ipv6_addresses, 
+         cnonical_names) = resolve(&qrc.qname, ROOT_SERVER, MAX_DEPTH).await?;
 
-    // Send the response
-    socket
-        .lock()
-        .await
-        .send_to(&enc.data, client)
+    println!("IPv4 addresses={:?}", ipv4_addresses);
+    println!("IPv6 addresses={:?}", ipv6_addresses);
+    println!("Server Names={:?}",   cnonical_names);
+
+    req.header.flags = Flags {
+        qr:    true,  // This is a response
+        opcode: 0,    // Standard query
+        aa:    true,  // Authoritative answer
+        tc:    false, // Not truncated
+        rd:    true,  // Recursion desired
+        ra:    true,  // Recursion available
+        z:     0,     // Reserved
+        rcode: 0,     // No error
+    };
+
+    // Add the answers
+    for ip in ipv4_addresses {
+        req.answers.push(AnswerRecord::new(qrc.qname.clone(), ip));
+    }
+
+    for ip in ipv6_addresses {
+        req.answers.push(AnswerRecord::new(qrc.qname.clone(), ip));
+    }
+
+    for cname in cnonical_names {
+        req.answers.push(AnswerRecord::new(qrc.qname.clone(), cname));
+    }
+
+    // Update answer count in the header
+    req.header.an_count = req.answers.len() as u16;
+
+    // Encode DNS response into binary format
+    let enc = req.encode()?;
+
+    // Send encoded DNS response to client
+    sock
+        .send_to(&enc.data, addr)
         .await
         .map_err(|_| DnsError::SocketError)?;
 
